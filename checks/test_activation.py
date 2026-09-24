@@ -5,7 +5,7 @@
 
 重点盯四件事：
   1. 口令算得对：同一段算多少次都一样、不同段算出来不一样；
-  2. **三天一换**：一个口令能撑 1~3 天，更早的段一律不认；
+  2. **七天一换**：一个口令能撑 1~7 天，更早的段一律不认；
   3. **版本绑定**：用别的版本算出来的口令，本版必须拒绝（「旧版崩坏」的原理）；
   4. **授权服务器连不上时一律放行**——绝不能因为网络问题把人锁在门外
      （抢课那天连不上授权服务器的话，那才是最糟的事）。
@@ -36,9 +36,10 @@ def check(label, got, want):
 
 def check_true(label, got, why=""):
     CHECKS[0] += 1
+    why_text = "" if why in ("", None) else str(why)
     if not got:
-        FAILURES.append("%s%s" % (label, ("：" + why) if why else ""))
-        print("  FAIL %s %s" % (label, why))
+        FAILURES.append("%s%s" % (label, ("：" + why_text) if why_text else ""))
+        print("  FAIL %s %s" % (label, why_text))
     else:
         print("  ok   %s" % label)
 
@@ -67,7 +68,7 @@ section("1 口令怎么算：同一段一样、不同段不一样")
 # ==========================================================================
 
 check_true("这一份带了密钥（说明是「给大家用」的那份）", bool(SECRET))
-check("几天换一次", PERIOD, 3)
+check("几天换一次", PERIOD, 7)
 
 today = code_for_offset(0)
 check("口令长度 6", len(today), 6)
@@ -79,21 +80,22 @@ check_true("换一段就换一个口令",
            code_for_period(activation.period_index(0) + 1) != today,
            code_for_period(activation.period_index(0) + 1))
 
-# 这一段里的每一天都该算出同一个口令（这就是"三天一换"）
-same_period_offsets = [offset for offset in range(-5, 6)
+# 这一段里的每一天都该算出同一个口令（这就是"N 天一换"）
+# 扫描范围要大于 period：前后各 period+2 天，本段日期数应正好等于 PERIOD。
+span = PERIOD + 2
+same_period_offsets = [offset for offset in range(-span, span + 1)
                        if activation.period_index(offset) ==
                        activation.period_index(0)]
 same_period = [code_for_offset(offset) for offset in same_period_offsets]
 check_true("同一段里的每一天都算同一个口令", len(set(same_period)) == 1,
-           same_period)
-# 注意不能断言"今天往后还有 3 天"——今天是这一段中间那天的话，往后只剩 2 天。
-# 真正的性质是：前后各 ±5 天这个范围里，属于本段的日期正好 3 个。
-check_true("一段正好是 3 天（前后各 ±5 天里落进本段的有 %d 天）"
-           % len(same_period_offsets), len(same_period_offsets) == PERIOD,
-           same_period_offsets)
-check_true("「这段还剩几天」落在 1~3",
+           "、".join(same_period))
+check_true("一段正好是 %d 天（扫描范围内落进本段 %d 天）"
+           % (PERIOD, len(same_period_offsets)),
+           len(same_period_offsets) == PERIOD,
+           str(same_period_offsets))
+check_true("「这段还剩几天」落在 1~%d" % PERIOD,
            1 <= activation.period_last_day(0) <= PERIOD,
-           activation.period_last_day(0))
+           str(activation.period_last_day(0)))
 
 # ==========================================================================
 section("2 校验：认本段、认相邻段（容忍时间偏差）、更早的一律不认")

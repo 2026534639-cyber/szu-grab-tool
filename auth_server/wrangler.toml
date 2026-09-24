@@ -1,0 +1,9 @@
+# 深大抢课助手的授权服务（Cloudflare Worker）
+name = "szu-grab-auth"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# 授权状态都放这个 KV 命名空间里（和博客的 visit-stats 是分开的，互不影响）
+[[kv_namespaces]]
+binding = "szu_grab_auth"
+id = "de164e7f7c1a4d748ed803e8f698f140"

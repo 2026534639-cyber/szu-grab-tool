@@ -5,6 +5,10 @@
 #   把会话公开了。出错记录同理。
 szu_grab_config.json
 深大抢课助手_出错记录.txt
+szu_grab_auth.json
+
+# ★ 授权密钥（谁拿到就能自己造口令）——只留本机，不进仓库
+activation.json
 
 # 打包产物与中间文件（体积大、可以由 build.bat 重新生成）
 dist/

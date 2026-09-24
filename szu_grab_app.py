@@ -46,6 +46,8 @@ from tkinter import messagebox, scrolledtext, ttk
 
 import requests
 
+import activation
+
 from szu_grabber import (
     BASE_URL,
     burst_lead_for,
@@ -1994,12 +1996,99 @@ class App(tk.Tk):
                  % ico_problem)
 
 
+# ==========================================================================
+# 启动口令门（只有「给大家用」那一份 exe 会有）
+#
+# 自己用的那份不带 activation.json，所以 activation.ENABLED 是 False，
+# 这里直接放行——不弹窗、不联网、什么都不问。
+# ==========================================================================
+
+def activation_gate() -> bool:
+    """要口令。返回 True 才继续开主窗口。"""
+    if not activation.ENABLED:
+        return True
+
+    root = tk.Tk()
+    root.title("深大抢课助手 · 口令")
+    try:
+        root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / 72.0)
+    except Exception:
+        pass
+    root.resizable(False, False)
+    state = {"ok": False, "fails": 0}
+
+    frame = ttk.Frame(root, padding=18)
+    frame.pack(fill="both", expand=True)
+    ttk.Label(frame, text="这一份需要口令才能打开", font=FONT_TITLE,
+              foreground=SZU_RED).pack(anchor="w")
+    ttk.Label(frame, justify="left", foreground="#555555", font=FONT_SMALL,
+              text="口令找作者要。\n"
+                   "（口令每天会变；如果你手上是旧版，旧口令可能已经不管用了。）").pack(
+        anchor="w", pady=(6, 10))
+
+    entry = ttk.Entry(frame, width=18, font=FONT, justify="center")
+    entry.pack(anchor="w")
+    entry.focus_set()
+
+    tip = tk.StringVar(value="")
+    ttk.Label(frame, textvariable=tip, foreground="#B03030", font=FONT_SMALL,
+              justify="left").pack(anchor="w", pady=(6, 0))
+
+    button = ttk.Button(frame, text="进入")
+    button.pack(anchor="w", pady=(10, 0))
+
+    def unlock_after(seconds):
+        """猜错太多次：按钮先禁用一会儿，挡一下暴力猜。"""
+        left = {"n": int(seconds)}
+
+        def tick():
+            if left["n"] <= 0:
+                button.configure(state="normal")
+                tip.set("")
+                return
+            tip.set("试的次数太多了，等 %d 秒再试。" % left["n"])
+            left["n"] -= 1
+            root.after(1000, tick)
+
+        button.configure(state="disabled")
+        tick()
+
+    def submit(event=None):
+        ok, why = activation.verify(entry.get())
+        if ok:
+            state["ok"] = True
+            root.destroy()
+            return
+        state["fails"] += 1
+        tip.set("✗ " + why)
+        entry.select_range(0, "end")
+        entry.focus_set()
+        if state["fails"] >= 5:
+            state["fails"] = 0
+            unlock_after(30)
+
+    button.configure(command=submit)
+    entry.bind("<Return>", submit)
+    root.protocol("WM_DELETE_WINDOW", root.destroy)
+    root.update_idletasks()
+    # 放到屏幕中间
+    width, height = root.winfo_reqwidth(), root.winfo_reqheight()
+    x = (root.winfo_screenwidth() - width) // 2
+    y = (root.winfo_screenheight() - height) // 3
+    root.geometry("+%d+%d" % (max(0, x), max(0, y)))
+    root.mainloop()
+    return state["ok"]
+
+
 def main():
     # 必须在建窗口之前声明，否则字会被 Windows 拉伸放大而发虚
     enable_dpi_awareness()
     # 打包后没有控制台，出错信息必须自己存下来，否则用户只会看到"闪了一下"
     sys.excepthook = _main_thread_excepthook
     threading.excepthook = _worker_thread_excepthook
+    # 「给大家用」那一份要先过口令门；自己用的那份直接放行
+    if not activation_gate():
+        return
     App().mainloop()
 
 

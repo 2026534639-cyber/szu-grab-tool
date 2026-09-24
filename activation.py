@@ -76,21 +76,58 @@ def app_version() -> str:
 
 # --------------------------------------------------------------------------
 # 口令
+#
+# 口令按「一段时间」算，而不是按天：`period_days = 3` 就是**三天换一次**
+# （改成 1 就是每天换，改成 7 就是每周换）。同一段里的每一天算出来都一样。
 # --------------------------------------------------------------------------
 
 ALPHABET = "".join(ch for ch in string.ascii_uppercase + string.digits
                    if ch not in "O0I1")          # 去掉易混的 0/O/1/I
 
 
-def password_for(secret: str, day: str, version: str, length: int = 6) -> str:
-    """算出「某一天 + 某个版本」的口令。生成器和 exe 用的是同一个函数。"""
-    seed = "%s|%s" % (day, version)
+def period_days() -> int:
+    """几天换一次口令。"""
+    try:
+        value = int(CONFIG.get("period_days") or 1)
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, value)
+
+
+def day_index(offset_days: int = 0) -> int:
+    """把「本地某个日期」变成一个整数天数序号。
+
+    用本机当天零点算，所以**分界线落在当地午夜**，不会出现"早上八点换口令"
+    这种怪事（直接用 UTC 天数就会那样，因为中国是 UTC+8）。
+    """
+    stamp = time.localtime(time.time() + offset_days * 86400)
+    midnight = time.mktime((stamp.tm_year, stamp.tm_mon, stamp.tm_mday,
+                            0, 0, 0, 0, 0, -1))
+    return int(midnight // 86400)
+
+
+def period_index(offset_days: int = 0) -> int:
+    """这个日期落在第几段（每 period_days 天一段）。"""
+    return day_index(offset_days) // period_days()
+
+
+def period_last_day(offset_days: int = 0) -> int:
+    """这段还剩几天结束（1 表示今天就是这段的最后一天）。"""
+    period = period_days()
+    return period - (day_index(offset_days) % period)
+
+
+def password_for(secret: str, period: int, version: str, length: int = 6) -> str:
+    """算出「第 period 段 + 某个版本」的口令。
+
+    生成器和 exe 用的是同一个函数。输入是**段号**，不是日期——
+    所以同一段里哪一天算都得同一个口令。
+    """
+    seed = "%s|%s" % (period, version)
     digest = hmac.new(secret.encode("utf-8"), seed.encode("utf-8"),
                       hashlib.sha256).digest()
-    out = []
-    for index in range(length):
-        out.append(ALPHABET[digest[index] % len(ALPHABET)])
-    return "".join(out)
+    return "".join(ALPHABET[digest[index] % len(ALPHABET)]
+                   for index in range(length))
 
 
 def day_string(offset_days: int = 0) -> str:
@@ -98,12 +135,22 @@ def day_string(offset_days: int = 0) -> str:
                                                    + offset_days * 86400))
 
 
-def accepted_passwords(days_back: int = 1) -> list:
-    """当前可用的口令（含昨天那份，容忍电脑时间/时区有点偏）。"""
+def accepted_passwords() -> list:
+    """当前可用的口令。
+
+    认「今天前后各一天」落在的那些段——而不是简单地认"上一段"。
+    差别在哪：如果是三天一换，认上一段等于一个口令能活 6 天；
+    而认 ±1 天的话，只有换段那一天前后会同时认两个码，其余日子只有一个。
+    这样既能容忍用户电脑时间偏一点，又不会让旧口令赖着不走。
+    """
     version = app_version()
     secret = CONFIG.get("secret", "")
-    return [password_for(secret, day_string(-offset), version)
-            for offset in range(days_back + 1)]
+    found = []
+    for offset in (-1, 0, 1):
+        code = password_for(secret, period_index(offset), version)
+        if code not in found:
+            found.append(code)
+    return found
 
 
 def check_password(typed: str) -> bool:

@@ -2023,7 +2023,7 @@ def activation_gate() -> bool:
               foreground=SZU_RED).pack(anchor="w")
     ttk.Label(frame, justify="left", foreground="#555555", font=FONT_SMALL,
               text="口令找作者要。\n"
-                   "（口令每天会变；如果你手上是旧版，旧口令可能已经不管用了。）").pack(
+                   "（口令会定期更换；如果你手上是旧版，旧口令可能已经不管用了。）").pack(
         anchor="w", pady=(6, 10))
 
     entry = ttk.Entry(frame, width=18, font=FONT, justify="center")

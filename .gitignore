@@ -1,0 +1,22 @@
+# git 要忽略的东西
+#
+# ★ 最重要的一条：szu_grab_config.json 里存着用户粘贴的凭证（含 Cookie，
+#   就是账号的实时会话）。**绝对不能提交进仓库**——一旦推到 GitHub 就等于
+#   把会话公开了。出错记录同理。
+szu_grab_config.json
+深大抢课助手_出错记录.txt
+
+# 打包产物与中间文件（体积大、可以由 build.bat 重新生成）
+dist/
+build/
+*.spec
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 编辑器和系统的杂项
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

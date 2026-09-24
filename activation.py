@@ -15,12 +15,11 @@
      旧 exe 拿自己的版本号去算，算出来永远是"不对"。
      所以不需要服务器也能做到"旧版崩坏"。
 
-━━━━━━━━━━━━ 先说清两个弱点 ━━━━━━━━━━━━
-  · **密钥在 exe 里，能脱壳的人可以挖出来**，进而自己造口令。对"同学之间
-    互相传一传"这个场景够用；要真挡住破解，得上服务器或加壳（我不建议加壳，
-    杀软误报会毁掉"别人拿到就能用"这件事）。
-  · **这是靠"日期"对时**的：用户电脑时间被改（或时区不对）就会算不对口令。
-    所以校验时**同时接受昨天和今天的口令**，留出容错。
+━━━━━━━━━━━━ 先说清边界 ━━━━━━━━━━━━
+  · 「给大家用」那份：密钥以 AES-GCM 密封件进包，关键模块经 PyArmor 混淆；
+    能抬高解包成本，**不是绝对防破解**。能脱壳的人仍可能最终还原。
+  · **这是靠"日期"对时**的：用户电脑时间被改会算不对口令，
+    所以校验时认「今天前后各一天」所在段，留出容错。
 
 ━━━━━━━━━━━━ 另外还有一层（可选，能连上才生效）━━━━━━━━━━━━
 `activation.json` 里可以配一个 `endpoint`（我给他部署的那个 Cloudflare 服务）。
@@ -37,7 +36,8 @@ import string
 import sys
 import time
 
-CONFIG_NAME = "activation.json"
+CONFIG_NAME = "activation.json"   # 本机开发 / 生成口令用（不进分发包）
+SEAL_NAME = "activation.seal"     # 「给大家用」打包进 exe 的密封件
 CACHE_NAME = "szu_grab_auth.json"
 SERVER_TIMEOUT = 6.0
 
@@ -53,17 +53,47 @@ def _resource(name: str) -> str:
     return os.path.join(base, name)
 
 
-def load_config() -> dict:
-    """读打包进来的授权配置。**文件不在就说明是"自己用"的那一份。**"""
-    path = _resource(CONFIG_NAME)
-    if not os.path.exists(path):
+def _load_from_seal(path: str) -> dict:
+    """从密封件解出配置。失败返回空 dict（当作没有授权）。"""
+    try:
+        # 延迟导入：自己用的那份不带 seal_secret，也不该依赖它
+        from seal_secret import unseal
+        with open(path, "rb") as handle:
+            return unseal(handle.read())
+    except Exception:
         return {}
+
+
+def _load_from_json(path: str) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
-    return data if isinstance(data, dict) else {}
+
+
+def load_config() -> dict:
+    """读授权配置。
+
+    优先级：
+      1. 打包进 exe 的 activation.seal（分发版，密钥不落明文）
+      2. 同目录 / 资源里的 activation.json（本机开发、生成口令）
+    两样都没有 → 空配置 → ENABLED=False → 不问口令（自己用那份）。
+    """
+    seal_path = _resource(SEAL_NAME)
+    if os.path.exists(seal_path):
+        data = _load_from_seal(seal_path)
+        if data.get("secret"):
+            return data
+    # 本机 json：先资源目录，再工程根（生成口令脚本用）
+    for candidate in (_resource(CONFIG_NAME),
+                      os.path.join(_app_dir(), CONFIG_NAME)):
+        if os.path.exists(candidate):
+            data = _load_from_json(candidate)
+            if data.get("secret"):
+                return data
+    return {}
 
 
 CONFIG = load_config()
@@ -77,8 +107,8 @@ def app_version() -> str:
 # --------------------------------------------------------------------------
 # 口令
 #
-# 口令按「一段时间」算，而不是按天：`period_days = 3` 就是**三天换一次**
-# （改成 1 就是每天换，改成 7 就是每周换）。同一段里的每一天算出来都一样。
+# 口令按「一段时间」算，而不是按天：`period_days = 7` 就是**七天换一次**
+# （改成 1 就是每天换，改成 3 就是三天换）。同一段里的每一天算出来都一样。
 # --------------------------------------------------------------------------
 
 ALPHABET = "".join(ch for ch in string.ascii_uppercase + string.digits
@@ -153,9 +183,10 @@ def accepted_passwords() -> list:
     return found
 
 
-def check_password(typed: str) -> bool:
-    """离线校验。大小写不敏感、首尾空格不算。"""
-    typed = (typed or "").strip().upper()
+def check_password(typed) -> bool:
+    """离线校验。大小写不敏感、首尾空格不算。typed 可为 None。"""
+    typed = "" if typed is None else str(typed)
+    typed = typed.strip().upper()
     if not typed:
         return False
     return typed in accepted_passwords()

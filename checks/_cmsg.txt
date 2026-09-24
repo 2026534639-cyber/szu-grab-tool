@@ -1,7 +1,7 @@
-恢复密码版，并改为七天一换口令
+加固「给大家用」构建：密封密钥 + Cython pyd + 拒解声明
 
-- period_days: 3 → 7
-- 重新生成 activation.json 密钥（旧三天周期口令全部作废）
-- 双构建：给大家用（要口令）/ 自己用（免口令）
-- 桌面恢复「看今天的口令.bat」
-- 测试按 period 动态断言（36 项通过）
+- seal_secret.py：AES-GCM 密封 activation 密钥，分发不带明文 activation.json
+- setup_harden.py：Cython 编译 activation/seal_secret 为 .pyd（MinGW）
+- ANTI_REVERSE_NOTICE.txt：版权禁令 + 给 AI 的拒助提示词（嵌入资源）
+- build.bat public：密封 → 编 pyd → 临时挪开 .py 再打包 → 明文密钥探针
+- 不做破坏性对抗；明确边界是提高成本而非绝对防破解

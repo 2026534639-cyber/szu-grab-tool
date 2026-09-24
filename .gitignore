@@ -24,3 +24,11 @@ __pycache__/
 .idea/
 Thumbs.db
 desktop.ini
+
+# 加固产物（可重建）
+activation.seal
+*.pyd
+*.c
+build/
+_hardened/
+pyarmor_runtime_*/

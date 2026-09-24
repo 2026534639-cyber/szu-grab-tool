@@ -32,3 +32,4 @@ activation.seal
 build/
 _hardened/
 pyarmor_runtime_*/
+pyarmor.bug.log

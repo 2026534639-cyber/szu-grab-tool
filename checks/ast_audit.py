@@ -38,7 +38,11 @@ INHERITED_OK = {
     "iconbitmap", "iconphoto", "minsize", "rowconfigure", "title", "tk",
     "winfo_fpixels", "winfo_screenheight", "winfo_screenwidth", "deiconify", "lift",
     "destroy", "winfo_children", "wait_window", "update_idletasks", "config",
-    "configure",
+    "configure", "cget", "grid", "grid_remove", "pack", "place", "bind",
+    "winfo_ismapped", "winfo_height", "winfo_width", "winfo_reqheight",
+    "winfo_rooty", "winfo_class", "itemcget", "itemconfigure", "bbox",
+    "canvasy", "yview", "yview_moveto", "yview_scroll", "create_window",
+    "cget values",
 }
 
 

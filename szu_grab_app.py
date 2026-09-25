@@ -669,11 +669,13 @@ class App(tk.Tk):
         self.attempt_counts = {}   # 清单 iid → 已尝试次数（用来给日志节流）
         self.help_win = None
         self._auto_parse_job = None   # 「粘贴后自动识别」那个延时任务的句柄
+        self._poll_job = None         # 队列轮询的 after 句柄
+        self._left_bar_job = None     # 左栏滚动条刷新的 after 句柄
 
         self.cfg = self._load_config()
         self._build_ui()
         self._restore_config()
-        self.after(120, self._poll_queue)
+        self._poll_job = self.after(120, self._poll_queue)
 
         self._set_window_icon()
         self.log("欢迎使用。第一步：按 F12 → Network → 右键 recommendedCourse.do "
@@ -686,20 +688,102 @@ class App(tk.Tk):
         """把设计尺寸换算成当前屏幕缩放下该用的像素值。"""
         return int(round(value * self.scale))
 
+    def _work_area(self):
+        """屏幕可用区域（刨掉任务栏）。拿不到就退回屏幕尺寸减一点边距。
+
+        ★ 为什么要刨任务栏：只按屏幕高度算的话，窗口底部会压在任务栏下面，
+          最后一行按钮点不到——小屏笔记本上尤其明显。
+        """
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        work_w, work_h = screen_w, screen_h
+        try:
+            import ctypes
+            from ctypes import wintypes
+            rect = wintypes.RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0,
+                                                          ctypes.byref(rect), 0):
+                if rect.right - rect.left > 200 and rect.bottom - rect.top > 200:
+                    work_w = rect.right - rect.left
+                    work_h = rect.bottom - rect.top
+        except Exception:
+            pass
+        return work_w, work_h
+
     def _apply_window_size(self):
-        """按缩放定窗口大小，并保证不会超出屏幕。"""
-        width, height = self.s(1240), self.s(900)
-        # 只在屏幕尺寸看起来可信时才用它收口。万一读到异常的小值，
-        # 下面这些 min() 会算出负数，窗口就会变成一个空壳（只剩标题栏）。
-        screen_w, screen_h = self.winfo_screenwidth(), self.winfo_screenheight()
-        if screen_w > self.s(500):
-            width = min(width, screen_w - self.s(40))
-        if screen_h > self.s(400):
-            height = min(height, screen_h - self.s(80))
-        width = max(width, self.s(860))
-        height = max(height, self.s(560))
+        """按缩放定窗口大小，并保证它装得进屏幕的可用区域。
+
+        这里的每一处 min/max 都为了同一件事：**窗口不能比能用地方还大**。
+        之前 height 有个写死的下限 max(height, s(560))，在 1366x768 + 150%
+        缩放下它算出 840 —— 比屏幕还高，底部按钮直接被顶出屏幕。
+        """
+        want_w, want_h = self.s(1240), self.s(900)
+        work_w, work_h = self._work_area()
+        # 只在读到可信的屏幕尺寸时才用它收口；读到异常小值时保持原尺寸，
+        # 免得算出负数让窗口变成一个空壳。
+        if work_w > self.s(500):
+            want_w = min(want_w, work_w - self.s(40))
+        if work_h > self.s(400):
+            want_h = min(want_h, work_h - self.s(60))
+        # 下限只能"收紧到什么程度"，绝不能反过来超过可用区域
+        min_w = min(self.s(820), max(self.s(560), work_w - self.s(40)))
+        min_h = min(self.s(520), max(self.s(420), work_h - self.s(60)))
+        width = max(want_w, min_w) if want_w >= min_w else want_w
+        height = max(want_h, min_h) if want_h >= min_h else want_h
         self.geometry("%dx%d" % (width, height))
-        self.minsize(min(self.s(1100), width), min(self.s(720), height))
+        # 允许用户继续缩小（小屏上让左栏靠滚动条够到全部内容）
+        self.minsize(min(self.s(820), width), min(self.s(520), height))
+        self._short_screen = height < self.s(700)
+
+    # ==================== 左栏滚动（小屏适配） ====================
+
+    def _on_left_resize(self, event=None):
+        """左栏内容变了：更新可滚动范围，并决定要不要显示滚动条。"""
+        try:
+            self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+        except Exception:
+            return
+        self._refresh_left_bar()
+
+    def _on_left_canvas_resize(self, event):
+        """窗口宽了/窄了：让左栏内容跟着变宽（否则右边会留一条空白）。"""
+        try:
+            self.left_canvas.itemconfigure(self.left_window, width=event.width)
+        except Exception:
+            pass
+        self._refresh_left_bar()
+
+    def _refresh_left_bar(self):
+        """内容装得下就藏起滚动条，装不下才显示——小屏上滚动条才出现。"""
+        try:
+            need = (self.left_canvas.bbox("all")[3]
+                    > self.left_canvas.winfo_height())
+        except Exception:
+            return
+        if need and not self._left_bar_shown:
+            self.left_bar.grid()
+            self._left_bar_shown = True
+        elif not need and self._left_bar_shown:
+            self.left_bar.grid_remove()
+            self._left_bar_shown = False
+
+    def _bind_left_wheel(self, widget):
+        """把滚轮接到左栏的每个子控件上。
+
+        Tk 的滚轮事件不会从子控件冒泡到画布，所以要逐个绑。
+        跳过 Text / 滚动条 / 表格：它们自己要用滚轮，抢了它们就没法滚了。
+        """
+        for child in widget.winfo_children():
+            if isinstance(child, (tk.Text, ttk.Scrollbar, ttk.Treeview)):
+                continue
+            child.bind("<MouseWheel>", self._on_left_wheel, add="+")
+            self._bind_left_wheel(child)
+
+    def _on_left_wheel(self, event):
+        try:
+            self.left_canvas.yview_scroll(int(-event.delta / 120), "units")
+        except Exception:
+            pass
 
     def _build_ui(self):
         self.columnconfigure(0, weight=0, minsize=self.s(440))
@@ -714,6 +798,10 @@ class App(tk.Tk):
         self._build_left()
         self._build_right()
         self._build_log()
+        # 左栏的滚轮要等控件都建好才能逐个绑
+        if getattr(self, "left_canvas", None) is not None:
+            self._bind_left_wheel(self.left_canvas)
+            self._left_bar_job = self.after(200, self._refresh_left_bar)
 
     def _build_header(self):
         bar = ttk.Frame(self, padding=(self.s(16), self.s(12), self.s(16), self.s(6)))
@@ -734,8 +822,28 @@ class App(tk.Tk):
             row=0, column=2, rowspan=2, sticky="e", padx=(self.s(14), 0))
 
     def _build_left(self):
-        left = ttk.Frame(self, padding=(self.s(16), self.s(4), self.s(8), self.s(12)))
-        left.grid(row=1, column=0, sticky="nsew")
+        # 左栏做成可滚动的：小屏（1366x768 这类）放不下它的自然高度（约 800px），
+        # 不滚的话底部的「开始抢课」和提示会被裁掉，用户根本点不到。
+        holder = ttk.Frame(self)
+        holder.grid(row=1, column=0, sticky="nsew")
+        holder.rowconfigure(0, weight=1)
+        holder.columnconfigure(0, weight=1)
+        self.left_canvas = tk.Canvas(holder, highlightthickness=0, borderwidth=0,
+                                     background=self.cget("background"))
+        self.left_bar = ttk.Scrollbar(holder, orient="vertical",
+                                      command=self.left_canvas.yview)
+        # 自己记着滚动条有没有摆出来。不用 winfo_ismapped()：窗口还没映射时
+        # 它一律返回 False，显隐判断就会失灵（测试里就撞上了）。
+        self._left_bar_shown = True
+        self.left_canvas.configure(yscrollcommand=self.left_bar.set)
+        self.left_canvas.grid(row=0, column=0, sticky="nsew")
+        self.left_bar.grid(row=0, column=1, sticky="ns")
+        left = ttk.Frame(self.left_canvas,
+                         padding=(self.s(16), self.s(4), self.s(8), self.s(12)))
+        self.left_window = self.left_canvas.create_window((0, 0), window=left,
+                                                          anchor="nw")
+        left.bind("<Configure>", self._on_left_resize)
+        self.left_canvas.bind("<Configure>", self._on_left_canvas_resize)
         left.columnconfigure(0, weight=1)
         left.rowconfigure(1, weight=1)
 
@@ -923,10 +1031,32 @@ class App(tk.Tk):
                  padx=self.s(16), pady=(0, self.s(12)))
         box.columnconfigure(0, weight=1)
         box.rowconfigure(0, weight=1)
-        self.txt_log = scrolledtext.ScrolledText(box, height=8, width=1, state="disabled",
+        self.txt_log = scrolledtext.ScrolledText(
+            box, height=5 if getattr(self, "_short_screen", False) else 8,
+            width=1, state="disabled",
                                                  font=("Consolas", 9), wrap="word",
                                                  relief="solid", borderwidth=1)
         self.txt_log.grid(row=0, column=0, sticky="nsew")
+
+    def destroy(self):
+        """关窗时先撤掉挂着的 after 任务。
+
+        不撤的话，窗口销毁后那些回调还会被触发，Tk 会往 stderr 刷
+        「invalid command name ..._poll_queue」——不影响功能，但用户看到
+        一堆报错会以为程序坏了。
+        """
+        for name in ("_poll_job", "_left_bar_job", "_auto_parse_job"):
+            job = getattr(self, name, None)
+            if job:
+                try:
+                    self.after_cancel(job)
+                except Exception:
+                    pass
+                setattr(self, name, None)
+        try:
+            super().destroy()
+        except Exception:
+            pass
 
     # ==================== 配置 ====================
 

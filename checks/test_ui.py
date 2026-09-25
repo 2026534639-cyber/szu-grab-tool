@@ -68,6 +68,7 @@ def check(label, got, want):
 def check_true(label, got, why=""):
     CHECKS[0] += 1
     if not got:
+        why = "" if why in ("", None) else str(why)
         FAILURES.append("%s%s" % (label, ("：" + why) if why else ""))
         print("  FAIL %s %s" % (label, why))
     else:
@@ -210,6 +211,44 @@ for _ in range(30):
 check("任务结束后，「停止」按钮恢复禁用", str(app_stop.btn_stop["state"]), "disabled")
 check("任务结束后，「开始抢课」恢复可点", str(app_stop.btn_start["state"]), "normal")
 app_stop.destroy()
+
+# ---- 挂机模式：抢课期间必须挡住系统休眠 ----
+# 全天挂机的头号杀手是电脑自己睡过去（进程被冻住，到点不发请求也不提醒）。
+# 这里用假的 SetThreadExecutionState 验证：开始时申请、结束时释放。
+import ctypes as _ctypes   # noqa: E402
+
+_calls = []
+_real = _ctypes.windll.kernel32.SetThreadExecutionState
+
+
+def _fake_setexec(flags):
+    _calls.append(flags)
+    return 1
+
+
+_ctypes.windll.kernel32.SetThreadExecutionState = _fake_setexec
+try:
+    app_awake = make_app(RAW)
+    app_awake._append_grab_item({"id": "ID1", "name": "甲课", "teacher": "某",
+                                 "type": "TYKC", "status": "待抢"})
+    _tick2 = threading.Event()
+    app_awake._start_worker(lambda: _tick2.wait(3))
+    app_awake.update()
+    check_true("开始抢课时申请了「别休眠」", bool(_calls) and app_awake._awake is True,
+               str(_calls))
+    _tick2.set()
+    for _ in range(40):
+        app_awake.update()
+        time.sleep(0.05)
+        if app_awake.worker is None:
+            break
+    check_true("任务结束后释放了「别休眠」（不会一直拦着系统）",
+               app_awake._awake is False, str(_calls))
+    check_true("恢复时用的是干净标志位（只有 ES_CONTINUOUS）",
+               _calls and _calls[-1] == 0x80000000, str(_calls[-1:]))
+    app_awake.destroy()
+finally:
+    _ctypes.windll.kernel32.SetThreadExecutionState = _real
 
 # ---- 不忙的时候，这些入口必须能正常工作 ----
 app = make_recording_app(busy=False)

@@ -47,6 +47,7 @@ def check(label, got, want):
 def check_true(label, got, why=""):
     CHECKS[0] += 1
     if not got:
+        why = "" if why in ("", None) else str(why)
         FAILURES.append("%s%s" % (label, ("：" + why) if why else ""))
         print("  FAIL %s %s" % (label, why))
     else:

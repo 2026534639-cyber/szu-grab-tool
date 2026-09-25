@@ -1,0 +1,7 @@
+挂机模式：抢课期间自动阻止系统休眠
+
+- 全天挂机的头号杀手是电脑自己睡过去（进程冻结→到点不发请求也不提醒）
+- 用 SetThreadExecutionState 申请 ES_SYSTEM_REQUIRED|ES_AWAYMODE_REQUIRED，
+  只在本程序运行期间生效，停止/出错后立刻恢复 ES_CONTINUOUS
+- 说明书第 5 条同步改成「程序自动挡，不用改电源设置；但别合盖」
+- checks/test_ui.py 加 3 项：开始申请、结束释放、恢复用干净标志位

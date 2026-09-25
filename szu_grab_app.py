@@ -350,7 +350,9 @@ GUIDE_SECTIONS = (
      "　　2. 搜课、把要抢的课加进清单。\n"
      "　　3. 勾上「等到开抢时刻自动开抢」，填准开抢时间。\n"
      "　　4. 速度档保持「慢」就行——开抢那几秒的冲刺是自动的。\n"
-     "　　5. ★ 把电源设置里的「睡眠」改成「从不」（控制面板 → 电源选项）。\n"
+     "　　5. ★ 电脑别睡：本程序在抢课期间会自动申请「别休眠」（开始抢课\n"
+     "　　　 时日志里会写一行「已开启挂机模式」），所以不用再去改电源设置。\n"
+     "　　　 但合上盖子、手动点睡眠仍然会中断它——挂机时别合盖。\n"
      "　　6. 点「开始抢课」，让它待机；界面会显示还剩多少时间。\n"
      "　　7. 浏览器也开着选课页面当备胎，万一这边出问题你还能手点。\n"
      "\n"
@@ -656,6 +658,7 @@ class App(tk.Tk):
         self.msg_q = queue.Queue()
         self.stop_flag = threading.Event()
         self.worker = None
+        self._awake = False
 
         self.grabber = None
         self.creds = {}
@@ -1140,6 +1143,8 @@ class App(tk.Tk):
                     iid, status = payload
                     if iid in self.grab_items:
                         self.tree_grab.set(iid, "status", status)
+                elif kind == "allow_sleep":
+                    self._allow_sleep()
                 elif kind == "busy":
                     # 任务结束后必须把 worker 置回 None。以前没有这一步，
                     # 于是「第一个任务跑完」之后，检查凭证 / 搜索 / 开始抢课
@@ -1512,6 +1517,37 @@ class App(tk.Tk):
         self._start_worker(self._grab_worker, grabber, (low, high), burst_plan,
                            self._grab_in_order_iids())
 
+    # ==================== 挂机时不让电脑睡 ====================
+    # 全天挂机的头号杀手不是程序出问题，而是电脑自己睡过去：
+    # 一睡进程就被冻住，到点既不发请求，也不会提醒你。
+    # SetThreadExecutionState 是 Windows 官方的接口，只表达"我在干活、
+    # 别休眠"，不改任何系统设置；停止抢课后立刻恢复。
+    _ES_CONTINUOUS = 0x80000000
+    _ES_SYSTEM_REQUIRED = 0x00000001
+    _ES_AWAYMODE_REQUIRED = 0x00000040
+
+    def _keep_awake(self) -> bool:
+        try:
+            import ctypes
+            flags = (self._ES_CONTINUOUS | self._ES_SYSTEM_REQUIRED
+                     | self._ES_AWAYMODE_REQUIRED)
+            if ctypes.windll.kernel32.SetThreadExecutionState(flags):
+                self._awake = True
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _allow_sleep(self) -> None:
+        if not getattr(self, "_awake", False):
+            return
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetThreadExecutionState(self._ES_CONTINUOUS)
+        except Exception:
+            pass
+        self._awake = False
+
     def _start_worker(self, target, *args):
         # 这两个按钮的状态必须在这里一起设：开始→禁用（防重复派发）、
         # 停止→启用（**不然用户根本没法让它停下来**）。
@@ -1521,6 +1557,9 @@ class App(tk.Tk):
         # 用户看到的现象就是「开抢了，暂停按钮按不了」。
         self.btn_start.configure(state="disabled")
         self.btn_stop.configure(state="normal")
+        if self._keep_awake():
+            self.log("已开启「挂机模式」：抢课期间电脑不会自动休眠"
+                     "（只影响本程序运行期间，点停止后立即恢复）。")
         self.worker = threading.Thread(target=self._run_worker, args=(target, args), daemon=True)
         self.worker.start()
 
@@ -1531,6 +1570,7 @@ class App(tk.Tk):
             self._post("log", "出错：%s" % error)
         finally:
             self._post("busy", False)
+            self._post("allow_sleep", True)
 
     def _grab_worker(self, grabber, delay_range, burst_plan=None, pending=None):
         # pending 正常由 start_grab 在主线程里读好传进来；直接调用（比如自检脚本）

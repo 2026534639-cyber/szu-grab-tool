@@ -839,11 +839,12 @@ class App(tk.Tk):
                       pady=(self.s(4), 0), padx=(self.s(18), 0))
         # 时 / 分 / 秒 三个小框，单位跟在各自框后面（_time_box 里画），
         # 冒号也是画好的，用户只管填数字。
-        self.entry_burst_h = self._time_box(row_time, "时")
+        # 默认 20:00:00：复选阶段每天 20:00 统一放退课名额，这是最常用的时刻
+        self.entry_burst_h = self._time_box(row_time, "时", 23, 20)
         ttk.Label(row_time, text=":", font=FONT).pack(side="left")
-        self.entry_burst_m = self._time_box(row_time, "分")
+        self.entry_burst_m = self._time_box(row_time, "分", 59, 0)
         ttk.Label(row_time, text=":", font=FONT).pack(side="left")
-        self.entry_burst_s = self._time_box(row_time, "秒")
+        self.entry_burst_s = self._time_box(row_time, "秒", 59, 0)
         ttk.Label(row_time, text="24 小时制", font=FONT_SMALL,
                   foreground="#555555").pack(side="left", padx=(self.s(10), 0))
 
@@ -997,41 +998,25 @@ class App(tk.Tk):
         """选了哪一档，就在下面用一句话说清它的代价。"""
         self.var_speed_hint.set("提示：" + SPEED_HINTS[self.var_speed.get()])
 
-    def _time_box(self, parent, tip):
-        """造一个两位数的输入小框，**并在它后面标出单位**（时 / 分 / 秒）。
+    def _time_box(self, parent, tip, maximum, default):
+        """造一个**下拉选择**的时间框，并在它后面标出单位（时 / 分 / 秒）。
+
+        为什么用下拉而不是让人手填：手填要自己记格式、自己补零、填错还要
+        重新来，用户说「没安全感」。下拉只能从合法值里挑，选不出错。
 
         tip 一定要显示出来：三个框长得一模一样、中间只夹两个冒号，
         不标单位用户根本不知道哪个是小时、哪个是秒——只能靠猜或者问。
-        （这个参数原来收了却没画出来，界面上就是三个空框，纯靠猜。）
         """
-        box = ttk.Entry(parent, width=3, font=FONT, justify="center")
+        values = ["%02d" % i for i in range(maximum + 1)]
+        box = ttk.Combobox(parent, width=3, font=FONT, justify="center",
+                           values=values, state="readonly")
+        box.set("%02d" % default)
         box.pack(side="left", padx=(self.s(4), 0))
-        box.bind("<KeyRelease>", self._on_time_typed)
+        # 换了一段选择就把下面的提示刷新一下（跟以前敲键盘时一样）
+        box.bind("<<ComboboxSelected>>", lambda event: self._on_burst_toggle())
         ttk.Label(parent, text=tip, font=FONT_SMALL,
                   foreground="#555555").pack(side="left", padx=(self.s(2), self.s(4)))
         return box
-
-    def _on_time_typed(self, event=None):
-        """输入时的即时照顾：只留数字、补齐不够两位、填满两位自动跳到下一格。"""
-        box = event.widget
-        raw = "".join(ch for ch in box.get() if ch.isdigit())[:2]
-        if raw != box.get():
-            at_end = box.index("insert") >= len(box.get())
-            box.delete(0, "end")
-            box.insert(0, raw)
-            if at_end:
-                box.icursor("end")
-        if len(raw) == 2:
-            order = (self.entry_burst_h, self.entry_burst_m, self.entry_burst_s)
-            try:
-                nxt = order[order.index(box) + 1]
-            except (ValueError, IndexError):
-                nxt = None      # 已经在「秒」框了，没有下一格
-            if nxt is not None:
-                nxt.focus_set()
-        # 每次敲完都要刷新提示。以前这行写在「跳到下一格」里面，于是在最后一个
-        # 框（秒）里填完两位会提前 return，提示停在上一次的内容上不动。
-        self._on_burst_toggle()
 
     def _read_start_time(self):
         """把「时 分 秒」三个框读成当天第几秒。返回 (秒数, 出错说明)。"""
@@ -1040,15 +1025,15 @@ class App(tk.Tk):
         second = self.entry_burst_s.get().strip() or "0"
         for text in (hour, minute, second):
             if text and not text.isdigit():
-                return None, "只能填数字（冒号已经给你放好了，不用自己打）"
+                return None, "时间只能从下拉框里选（选不出错，不用自己打字）"
         if not hour or not minute:
-            return None, "至少把「时」和「分」填上，例如下午三点就填 15 : 00"
+            return None, "「时」和「分」都要选上"
         if not (0 <= int(hour) <= 23):
-            return None, "「时」要填 0~23（下午三点是 15）"
+            return None, "「时」要在 00~23 里选（下午三点是 15）"
         if not (0 <= int(minute) <= 59):
-            return None, "「分」要填 0~59"
+            return None, "「分」要在 00~59 里选"
         if not (0 <= int(second) <= 59):
-            return None, "「秒」要填 0~59"
+            return None, "「秒」要在 00~59 里选"
         return int(hour) * 3600 + int(minute) * 60 + int(second), ""
 
     def _set_start_time(self, seconds):
@@ -1057,8 +1042,7 @@ class App(tk.Tk):
         for box, value in ((self.entry_burst_h, total // 3600),
                            (self.entry_burst_m, total % 3600 // 60),
                            (self.entry_burst_s, total % 60)):
-            box.delete(0, "end")
-            box.insert(0, "%02d" % value)
+            box.set("%02d" % value)
 
     def _start_time_value(self):
         """给外面用：返回秒数或 None。"""
@@ -1069,11 +1053,12 @@ class App(tk.Tk):
             self.var_burst_hint.set("")
             return
         if self._start_time_value() is None:
-            self.var_burst_hint.set("还没有填好开抢时刻。" + self._read_start_time()[1])
+            self.var_burst_hint.set("时刻还没选好。" + self._read_start_time()[1])
             return
         self.var_burst_hint.set(
-            "会在开抢前 %.0f 秒开始每秒约 7 次高频提交，冲 %.0f 秒后自动降回上面选的速度；"
-            "中途收到「操作过于频繁」会立刻退出高频。" % (BURST_LEAD, BURST_WINDOW))
+            "到点前 %.0f 秒自动开始高频提交，冲 %.0f 秒后降回上面选的速度。\n"
+            "★ 光勾选 + 选好时间还不会开抢：还要点下面的「开始抢课」把它挂上，"
+            "挂上后日志里会出现「开始待机」这一行。" % (BURST_LEAD, BURST_WINDOW))
 
     # ==================== 日志与消息 ====================
 

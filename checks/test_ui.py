@@ -349,67 +349,80 @@ app = make_app(RAW)
 app._set_start_time(15 * 3600)
 check("15:00:00 读回来是 15 点整", app._read_start_time()[0], 15 * 3600)
 
-app.entry_burst_h.delete(0, "end")
-app.entry_burst_h.insert(0, "25")
+# ---- 必须是「下拉选择」，不能是让人手填的空框 ----
+print("\n-- 时间框是下拉选择器 --")
+from tkinter import ttk as _ttk   # noqa: E402
+for box, tip, count in ((app.entry_burst_h, "时", 24),
+                        (app.entry_burst_m, "分", 60),
+                        (app.entry_burst_s, "秒", 60)):
+    check_true("%s 是下拉框（Combobox）" % tip,
+               isinstance(box, _ttk.Combobox), type(box).__name__)
+    check_true("%s 只能从列表里选（readonly）" % tip,
+               str(box.cget("state")) == "readonly", str(box.cget("state")))
+    check_true("%s 的选项有 %d 个（00~%02d）" % (tip, count, count - 1),
+               len(box.cget("values")) == count,
+               str(len(box.cget("values"))))
+check("「时」的第一项是 00", app.entry_burst_h.cget("values")[0], "00")
+check("「时」的最后一项是 23", app.entry_burst_h.cget("values")[-1], "23")
+check("「分」的最后一项是 59", app.entry_burst_m.cget("values")[-1], "59")
+
+# 默认值：复选阶段每天 20:00 放名额，所以默认就该是 20:00:00
+app2 = make_app(RAW)
+check("新打开时默认是 20:00:00（每天放名额的时刻）",
+      app2._start_time_value(), 20 * 3600)
+app2.destroy()
+
+# ---- 越界仍然要拦住（只读框选不出非法值，但代码 set 进去也要兜住）----
+app._set_start_time(15 * 3600)
+app.entry_burst_h.set("25")
 _sec, why = app._read_start_time()
-check("小时填 25 → 报错", _sec, None)
-check_true("报错说了「时」的范围", "0~23" in why, why)
+check("小时被塞成 25 → 报错", _sec, None)
+check_true("报错说了「时」的范围", "00~23" in why, why)
 
 app._set_start_time(15 * 3600)
-app.entry_burst_m.delete(0, "end")
-app.entry_burst_m.insert(0, "ab")
+app.entry_burst_m.set("ab")
 _sec, why = app._read_start_time()
-check("分钟填字母 → 报错", _sec, None)
-check_true("报错说了只能填数字", "数字" in why, why)
+check("分钟被塞成字母 → 报错", _sec, None)
+check_true("报错说了要从下拉框里选", "下拉框" in why, why)
 
 app._set_start_time(15 * 3600)
-app.entry_burst_h.delete(0, "end")
+app.entry_burst_h.set("")
 _sec, why = app._read_start_time()
-check("不填小时 → 报错", _sec, None)
-check_true("报错给了例子", "15" in why, why)
+check("时被清空 → 报错", _sec, None)
+check_true("报错说「时」和「分」都要选上", "都要选上" in why, why)
 
 # 秒留空按 0 算
 app._set_start_time(15 * 3600 + 30 * 60)
-app.entry_burst_s.delete(0, "end")
+app.entry_burst_s.set("")
 check("秒留空按 00 算", app._read_start_time()[0], 15 * 3600 + 30 * 60)
 
-# ---- 输入时的照顾：填满两位自动跳下一格，并且每次都要刷新提示 ----
-print("\n-- 三个小框的即时提示 --")
+# ---- 换选择时要刷新提示 ----
+print("\n-- 换了选择，提示要跟着刷新 --")
 app._set_start_time(0)
 app.var_burst.set(True)
-app.entry_burst_h.delete(0, "end")          # 故意空着，模拟"还没填好"
+app.entry_burst_h.set("")
 app._on_burst_toggle()
-check_true("没填时刻时提示「还没填好」", "还没" in app.var_burst_hint.get(),
+check_true("时刻没选全时提示「还没填好」", "还没" in app.var_burst_hint.get(),
            app.var_burst_hint.get())
 
-app.entry_burst_h.delete(0, "end")
-app.entry_burst_h.insert(0, "15")
-app.entry_burst_m.delete(0, "end")
-app.entry_burst_m.insert(0, "00")
-app.entry_burst_s.delete(0, "end")
-app.entry_burst_s.insert(0, "30")
-
-
-class _Event:
-    def __init__(self, widget):
-        self.widget = widget
-
-
+app._set_start_time(15 * 3600 + 30)
 app.var_burst_hint.set("（旧提示，等着被刷新）")
-app._on_time_typed(_Event(app.entry_burst_s))
-hint_after_last_box = app.var_burst_hint.get()
-check_true("在「秒」框里填满两位后，提示要刷新成高频说明",
-           "高频" in hint_after_last_box or "还没" in hint_after_last_box,
-           "提示还是：%r" % hint_after_last_box)
+app._on_burst_toggle()
+hint_after_pick = app.var_burst_hint.get()
+check_true("选好之后提示要变成高频说明",
+           "高频" in hint_after_pick, "提示还是：%r" % hint_after_pick)
 
-# 填了非法值也要立刻反映出来
+# 提示里必须写清楚：光勾选+选时间还不会开抢，得点「开始抢课」
+check_true("提示说明了「还要点开始抢课」",
+           "开始抢课" in hint_after_pick, hint_after_pick)
+
+# 越界值也要立刻反映到提示上
 app._set_start_time(15 * 3600)
-app.entry_burst_h.delete(0, "end")
-app.entry_burst_h.insert(0, "99")
+app.entry_burst_h.set("99")
 app.var_burst_hint.set("（旧提示，等着被刷新）")
-app._on_time_typed(_Event(app.entry_burst_h))
-check_true("填了非法小时，提示要变成报错",
-           "0~23" in app.var_burst_hint.get(), app.var_burst_hint.get())
+app._on_burst_toggle()
+check_true("不可用的时刻，提示要变成报错",
+           "00~23" in app.var_burst_hint.get(), app.var_burst_hint.get())
 
 # ---- 三个时间框必须自己说明单位（用户问过「这些空格分别是什么单位」）----
 print("\n-- 三个时间框的单位标签 --")
